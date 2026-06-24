@@ -1,0 +1,8 @@
+# App-wide dark finance theme. Streamlit reads this automatically.
+[theme]
+base = "dark"
+primaryColor = "#3DA5D9"            # accent — calm steel blue
+backgroundColor = "#0F1620"         # main canvas, dark slate
+secondaryBackgroundColor = "#1A2433" # cards, tabs, sidebar
+textColor = "#E6EAF0"               # off-white, easy on the eyes
+font = "sans serif"
