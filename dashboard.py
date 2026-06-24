@@ -16,10 +16,23 @@ it's a basis for understanding. You bring the judgment.
 Run:  streamlit run dashboard.py
 """
 
+import os
+
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 from sqlalchemy import create_engine, text
+
+# If running on Streamlit Cloud, the FRED key lives in Streamlit secrets.
+# Push it into the environment BEFORE importing config, which reads it from
+# os.environ. Wrapped in try/except so local/GitHub runs (no st.secrets) are
+# unaffected. The hosted dashboard only displays data, so it doesn't strictly
+# need the key — but this keeps everything consistent.
+try:
+    if "FRED_API_KEY" in st.secrets:
+        os.environ["FRED_API_KEY"] = st.secrets["FRED_API_KEY"]
+except Exception:
+    pass
 
 import config
 

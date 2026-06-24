@@ -11,9 +11,14 @@ DB_PATH = "sqlite:///market_data.db"
 
 # --- FRED (macro data: VIX, yields, USD/NOK, Brent) ---
 # Get a free key at https://fredaccount.stlouisfed.org/apikeys (instant, no card).
-# Locally: paste it between the quotes below.
-# In GitHub Actions: it's read from the FRED_API_KEY secret automatically.
-FRED_API_KEY = os.environ.get("FRED_API_KEY", "c0a0705eed26407ebe40d74704abeae9")
+# The key is read from the FRED_API_KEY environment variable. It is set:
+#   - Locally: set it in your terminal before running, OR paste it below.
+#   - GitHub Actions (the daily robot): from the repo secret FRED_API_KEY.
+#   - Streamlit Cloud (the hosted app): from Streamlit secrets (the app
+#     pushes st.secrets into the environment before importing this file).
+# IMPORTANT: do NOT paste your real key here if this repo is public. Leave the
+# placeholder and use the secret stores above.
+FRED_API_KEY = os.environ.get("FRED_API_KEY", "YOUR_FRED_KEY_HERE")
 
 # FRED series we pull. Left = FRED's code, right = friendly name stored in DB.
 FRED_SERIES = {
