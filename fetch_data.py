@@ -129,6 +129,60 @@ def fetch_holdings():
     _upsert(vrows, "valuation_history", keys=["ticker_id", "trade_date"])
     print(f"  holdings valuation: {len(vrows)} rows processed")
 
+    # Dividend ex-dates (history). yfinance .dividends returns the ex-dividend
+    # date as the index — reliable and deep. These explain a real mechanical
+    # move: a stock drops ~the dividend amount on its ex-date.
+    drows = []
+    for raw_ticker in raw:
+        try:
+            divs = yf.Ticker(raw_ticker).dividends
+        except Exception as e:
+            print(f"  -> {raw_ticker}: dividends fetch failed ({e})")
+            continue
+        if divs is None or len(divs) == 0:
+            continue
+        for dt, amount in divs.items():
+            try:
+                d = dt.date()
+            except Exception:
+                continue
+            drows.append({
+                "ticker_id": raw_ticker,
+                "ex_date": d,
+                "amount": float(amount),
+            })
+    _upsert(drows, "dividend_events", keys=["ticker_id", "ex_date"])
+    print(f"  holdings dividends: {len(drows)} ex-dates processed")
+
+    # Earnings dates (history + next). yfinance.get_earnings_dates returns past
+    # and upcoming dates with EPS estimate, reported EPS, and surprise %.
+    # Depth varies hugely by name (KOG: years; small caps: a row or two), so we
+    # store whatever exists and let the dashboard caption state the coverage.
+    erows = []
+    for raw_ticker in raw:
+        try:
+            edf = yf.Ticker(raw_ticker).get_earnings_dates(limit=24)
+        except Exception as e:
+            print(f"  -> {raw_ticker}: earnings dates failed ({e})")
+            continue
+        if edf is None or len(edf) == 0:
+            continue
+        for dt, row in edf.iterrows():
+            try:
+                d = dt.date()
+            except Exception:
+                continue
+            # Surprise % may be NaN (future dates or missing). Keep it nullable.
+            surprise = row.get("Surprise(%)")
+            erows.append({
+                "ticker_id": raw_ticker,
+                "earnings_date": d,
+                "surprise_pct": _num(surprise),
+                "reported_eps": _num(row.get("Reported EPS")),
+            })
+    _upsert(erows, "earnings_events", keys=["ticker_id", "earnings_date"])
+    print(f"  holdings earnings: {len(erows)} dates processed")
+
 
 # ---------------------------------------------------------------------------
 # 2. MACRO (FRED)

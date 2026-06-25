@@ -351,6 +351,45 @@ def load_macro(series):
 
 
 @st.cache_data(ttl=300)
+def load_dividends(ticker_id):
+    q = text("SELECT ex_date, amount FROM dividend_events "
+             "WHERE ticker_id=:t ORDER BY ex_date ASC")
+    return _safe_read(q, {"t": ticker_id}, ["ex_date"], numeric_cols=["amount"])
+
+
+@st.cache_data(ttl=300)
+def load_earnings(ticker_id):
+    q = text("SELECT earnings_date, surprise_pct, reported_eps FROM earnings_events "
+             "WHERE ticker_id=:t ORDER BY earnings_date ASC")
+    return _safe_read(q, {"t": ticker_id}, ["earnings_date"],
+                      numeric_cols=["surprise_pct", "reported_eps"])
+
+
+@st.cache_data(ttl=3600)
+def upcoming_holding_events(ticker_id):
+    """Next earnings + ex-dividend dates, live from yfinance, cached hourly.
+    Values may be None if Yahoo has nothing. Earnings dates are provisional —
+    Yahoo's small-cap coverage is patchy — so they're shown as estimates and
+    never plotted on charts."""
+    out = {"earnings": None, "ex_div": None}
+    try:
+        import yfinance as yf
+        cal = yf.Ticker(ticker_id).calendar
+        if isinstance(cal, dict):
+            ed = cal.get("Earnings Date")
+            if isinstance(ed, (list, tuple)) and ed:
+                out["earnings"] = str(ed[0])
+            elif ed:
+                out["earnings"] = str(ed)
+            xd = cal.get("Ex-Dividend Date")
+            if xd:
+                out["ex_div"] = str(xd)
+    except Exception:
+        pass
+    return out
+
+
+@st.cache_data(ttl=300)
 def last_updated():
     """Most recent date across all tables, to flag stale data."""
     dates = []
@@ -732,8 +771,9 @@ with tab3:
                     "model is a rough lens, not a law.</span>")
 
 # ===================== TAB 4: PRICES =====================
-def price_block(ticker_id, label, color, col):
-    """Price line + 200-day MA overlay + 52-week hi/lo readout + RSI panel."""
+def price_block(ticker_id, label, color, col, show_dividends=False):
+    """Price line + 200-day MA overlay + 52-week hi/lo readout + RSI panel.
+    show_dividends overlays ex-dividend date markers (holdings only)."""
     raw = load_prices(ticker_id)
     if raw.empty or "adj_close" not in raw.columns:
         return
@@ -775,6 +815,29 @@ def price_block(ticker_id, label, color, col):
     pf.update_layout(title=f"{label} — price, 50/200-day & Bollinger Bands",
                      showlegend=True,
                      legend=dict(orientation="h", y=1.12, font=dict(size=10)))
+    # Event markers (holdings only) — within the visible price range.
+    if show_dividends:
+        lo, hi = d["trade_date"].min(), d["trade_date"].max()
+        divs = load_dividends(ticker_id)
+        if not divs.empty:
+            vis = divs[(divs["ex_date"] >= lo) & (divs["ex_date"] <= hi)]
+            for _, ev in vis.iterrows():
+                pf.add_vline(x=ev["ex_date"], line_width=1, line_dash="dot",
+                             line_color="#E0A458", opacity=0.5)
+        earn = load_earnings(ticker_id)
+        if not earn.empty:
+            ev_vis = earn[(earn["earnings_date"] >= lo) & (earn["earnings_date"] <= hi)]
+            for _, ev in ev_vis.iterrows():
+                s = ev.get("surprise_pct")
+                # green = beat (positive surprise), red = miss, grey = unknown/future
+                if pd.isna(s):
+                    c = MUTED
+                elif s >= 0:
+                    c = "#2ECC71"
+                else:
+                    c = "#E74C3C"
+                pf.add_vline(x=ev["earnings_date"], line_width=1.2, line_dash="solid",
+                             line_color=c, opacity=0.55)
     col.plotly_chart(style_fig(pf, height=300), use_container_width=True,
                      key=f"price_{ticker_id}")
 
@@ -886,6 +949,32 @@ with tab5:
     if not holdings:
         st.info("No holdings configured. Add tickers to HOLDINGS in config.py.")
     else:
+        with st.expander("How to read the event markers"):
+            st.markdown(
+                "Each holding's price chart has vertical lines marking company "
+                "events, so you can see how the price moved around them.\n\n"
+                "**Earnings (solid lines):**\n"
+                "- 🟢 **Green = beat** — reported earnings came in *above* "
+                "analysts' estimate.\n"
+                "- 🔴 **Red = miss** — reported earnings came in *below* estimate.\n"
+                "- ⚪ **Grey = no data or upcoming** — an earnings date with no "
+                "recorded surprise figure yet.\n\n"
+                "*A green beat next to a falling price is common and instructive* "
+                "— a company can beat on earnings but still drop if its guidance "
+                "or outlook disappointed. The colour is the factual result; the "
+                "price move is the market's reaction, and they don't always agree.\n\n"
+                "**Ex-dividend (amber dotted lines):**\n"
+                "On the ex-dividend date the share price *mechanically* drops by "
+                "roughly the dividend amount — that's arithmetic, not a market "
+                "reaction. If you owned the stock before this date you're entitled "
+                "to the dividend; the price simply adjusts down to reflect the cash "
+                "leaving the company. This is one of the few price moves with a "
+                "clear, known cause.\n\n"
+                "**Important:** a marker shows *when* an event happened, not proof "
+                "it *caused* a nearby move. And coverage varies — large, long-"
+                "listed names (e.g. Kongsberg Gruppen) have years of history; "
+                "small or recently-listed names have little. Each holding states "
+                "its actual coverage.")
         tickers = list(holdings.items())
         # Two holdings per row
         for i in range(0, len(tickers), 2):
@@ -896,15 +985,51 @@ with tab5:
                 tkr, name = tickers[i + j]
                 col.subheader(name)
                 col.caption(tkr)
-                # price chart + MA/RSI/Bollinger (reuses index price_block)
-                price_block(tkr, name, ACCENT, col)
+                # price chart + MA/RSI/Bollinger + ex-dividend markers
+                price_block(tkr, name, ACCENT, col, show_dividends=True)
                 # valuation readouts (P/E, P/B) accruing from the snapshot
                 v = load_valuation(tkr)
                 with col.container():
                     valuation_readout(v, "pe_ratio", f"{name} P/E TTM")
                     valuation_readout(v, "pb_ratio", f"{name} P/B")
+                    # Upcoming events (provisional, live from yfinance)
+                    ev = upcoming_holding_events(tkr)
+                    parts = []
+                    if ev.get("earnings"):
+                        parts.append(f"next earnings ~<b>{ev['earnings'][:10]}</b>")
+                    if ev.get("ex_div"):
+                        parts.append(f"next ex-dividend ~<b>{ev['ex_div'][:10]}</b>")
+                    if parts:
+                        col.markdown(
+                            f'<div class="readout">Upcoming: {" · ".join(parts)} '
+                            f'<span style="color:{MUTED}">(estimated, from Yahoo '
+                            "— may shift)</span></div>", unsafe_allow_html=True)
+                    # Event-marker legend + coverage (honest about completeness)
+                    divs = load_dividends(tkr)
+                    earn = load_earnings(tkr)
+                    n_div = len(divs)
+                    n_earn = len(earn)
+                    # Distinguish rich coverage (e.g. KOG) from thin (small/new names)
+                    if n_earn <= 2 and n_div <= 2:
+                        coverage = (f"<b>Limited event history</b> on record "
+                                    f"({n_earn} earnings, {n_div} dividend) — this "
+                                    "is a small or recently-listed name, not a "
+                                    "complete record. More will accrue as it reports.")
+                    else:
+                        coverage = (f"Showing <b>{n_earn} earnings</b> and "
+                                    f"<b>{n_div} dividend</b> events on record.")
+                    col.markdown(
+                        f'<div class="readout">{coverage}<br>'
+                        '<b>Solid lines = earnings</b> (green = beat estimate, '
+                        'red = miss, grey = no data/upcoming). '
+                        '<b>Amber dotted = ex-dividend</b> (price mechanically '
+                        'drops ~the dividend that day — a known cause, unlike most '
+                        'moves). A marker shows <i>timing</i>, not proven cause.'
+                        '</div>', unsafe_allow_html=True)
         st.divider()
-        st.caption("Note: newly listed or spun-off names (e.g. recently "
-                   "demerged companies) will have short price history, so "
-                   "their 200-day average and 52-week range stay partial "
-                   "until enough trading days accrue.")
+        st.caption("Notes: newly listed or spun-off names have short price "
+                   "history, so their 200-day average, 52-week range, and event "
+                   "markers stay sparse until more data accrues. Earnings "
+                   "markers come from Yahoo and run deep for large caps but thin "
+                   "for small ones — the per-holding line above states the actual "
+                   "coverage. Upcoming dates are provisional and may shift.")
