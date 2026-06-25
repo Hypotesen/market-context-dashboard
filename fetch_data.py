@@ -74,6 +74,62 @@ def fetch_prices():
     print(f"  prices: {len(rows)} rows processed")
 
 
+def fetch_holdings():
+    """Fetch price history + a valuation snapshot for personal holdings.
+    Prices go into daily_prices (same table as indices, so the existing
+    price-block charts/RSI/MA work). Valuation (P/E, P/B, yield) goes into
+    a per-day snapshot in valuation_history, accruing over time."""
+    holdings = getattr(config, "HOLDINGS", {})
+    if not holdings:
+        return
+    print("Fetching personal holdings from yfinance...")
+    raw = list(holdings.keys())
+
+    # Prices — 2y history for MA/RSI/52wk, same as indices.
+    data = yf.download(raw, period="2y", group_by="ticker",
+                       auto_adjust=False, progress=False)
+    rows = []
+    for raw_ticker in raw:
+        try:
+            tdf = data[raw_ticker].dropna(how="all") if len(raw) > 1 else data.dropna(how="all")
+        except (KeyError, TypeError):
+            print(f"  -> no price data for {raw_ticker}, skipping")
+            continue
+        for dt, r in tdf.iterrows():
+            if "Close" not in r.index or pd.isna(r["Close"]):
+                continue
+            adj = r["Adj Close"] if "Adj Close" in r.index and pd.notna(r["Adj Close"]) else r["Close"]
+            rows.append({
+                "ticker_id": raw_ticker,        # store under the raw ticker
+                "trade_date": dt.date(),
+                "close": float(r["Close"]),
+                "adj_close": float(adj),
+                "volume": int(r["Volume"]) if pd.notna(r["Volume"]) else 0,
+            })
+    _upsert(rows, "daily_prices", keys=["ticker_id", "trade_date"])
+    print(f"  holdings prices: {len(rows)} rows processed")
+
+    # Valuation snapshot (today) — P/E, P/B, dividend yield, name.
+    today = datetime.date.today()
+    vrows = []
+    for raw_ticker in raw:
+        try:
+            info = yf.Ticker(raw_ticker).info
+        except Exception as e:
+            print(f"  -> {raw_ticker}: .info failed ({e}), skipping valuation")
+            continue
+        vrows.append({
+            "ticker_id": raw_ticker,
+            "trade_date": today,
+            "pe_ratio":   _num(info.get("trailingPE")),
+            "forward_pe": _num(info.get("forwardPE")),
+            "pb_ratio":   _num(info.get("priceToBook")),
+            "source":     "yfinance_holding",
+        })
+    _upsert(vrows, "valuation_history", keys=["ticker_id", "trade_date"])
+    print(f"  holdings valuation: {len(vrows)} rows processed")
+
+
 # ---------------------------------------------------------------------------
 # 2. MACRO (FRED)
 # ---------------------------------------------------------------------------
@@ -307,6 +363,7 @@ def fetch_norway_cpi():
 
 def run_all():
     fetch_prices()
+    fetch_holdings()
     fetch_macro()
     fetch_norway_cpi()
     fetch_valuation_snapshot()

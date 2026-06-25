@@ -66,6 +66,17 @@ BANDS = {
     },
 }
 
+# --- Personal holdings (for the My Holdings tab) ---
+# Edit this list as your positions change. Use Yahoo Finance tickers
+# (Oslo Børs names end in .OL). These are shown for factual context only —
+# the dashboard never issues buy/sell/hold opinions on them.
+HOLDINGS = {
+    "NRC.OL":   "NRC Group",
+    "KMAR.OL":  "Kongsberg Maritime",
+    "KOG.OL":   "Kongsberg Gruppen",
+    "DELIA.OL": "Dellia Group",
+}
+
 # --- Financial calendar -----------------------------------------------------
 # Hand-maintained list of scheduled market-moving events. Central banks publish
 # these ~a year ahead, so update once a year. Format: (date, type, label).

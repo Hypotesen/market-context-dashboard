@@ -106,6 +106,8 @@ def percentile_of_last(series, value):
 def yoy_from_index(df, date_col, value_col):
     """Convert a price/CPI *index* series into year-over-year % change.
     Matches each month to the value ~12 months earlier."""
+    if df.empty or value_col not in df.columns:
+        return pd.DataFrame()
     d = df.dropna(subset=[value_col]).sort_values(date_col).copy()
     if len(d) < 13:
         return pd.DataFrame()
@@ -139,6 +141,8 @@ def describe_trend(df, value_col, date_col, unit="", higher_means=None,
     """Auto-generate a plain-language reading of where a series is heading.
     Compares the latest value to ~30 points ago, classifies the move, and
     optionally attaches what rising/falling tends to signal."""
+    if df.empty or value_col not in df.columns:
+        return "Not enough data yet to read a trend."
     d = df.dropna(subset=[value_col]).sort_values(date_col)
     if len(d) < 5:
         return "Not enough data yet to read a trend."
@@ -365,7 +369,7 @@ def last_updated():
 
 def banded_chart(df, ycol, low, high, title, mode="lines+markers"):
     fig = go.Figure()
-    if df.empty or df[ycol].dropna().empty:
+    if df.empty or ycol not in df.columns or df[ycol].dropna().empty:
         fig.add_annotation(text="No data yet — accrues as the daily job runs",
                            showarrow=False, font=dict(size=14, color=MUTED))
         fig.update_layout(title=title)
@@ -386,6 +390,8 @@ def banded_chart(df, ycol, low, high, title, mode="lines+markers"):
 
 def valuation_readout(df, metric_col, label):
     """Factual 'where it sits' line — percentile + vs own average. No advice."""
+    if df.empty or metric_col not in df.columns:
+        return
     d = df.dropna(subset=[metric_col])
     if d.empty:
         return
@@ -440,8 +446,8 @@ st.caption("Scheduled events that often move markets. Faint dotted lines on "
            "connection.")
 upcoming_events_panel()
 
-tab1, tab2, tab3, tab4 = st.tabs(
-    ["Macro & VIX", "Oslo Børs", "S&P 500", "Price trends"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(
+    ["Macro & VIX", "Oslo Børs", "S&P 500", "Price trends", "My Holdings"])
 
 # ===================== TAB 1: MACRO =====================
 with tab1:
@@ -692,7 +698,7 @@ with tab3:
                "per dollar invested. Comparing it to the 10Y Treasury yield "
                "shows whether stocks are cheap or dear *relative to bonds* — "
                "often more useful than P/E alone.")
-    ev = v.dropna(subset=["pe_ratio"]).copy()
+    ev = v.dropna(subset=["pe_ratio"]).copy() if (not v.empty and "pe_ratio" in v.columns) else pd.DataFrame()
     bond = load_macro("US_10Y").rename(columns={"obs_date": "trade_date", "value": "y10"})
     if not ev.empty and not bond.empty:
         ev["earnings_yield"] = 100.0 / ev["pe_ratio"]
@@ -728,7 +734,10 @@ with tab3:
 # ===================== TAB 4: PRICES =====================
 def price_block(ticker_id, label, color, col):
     """Price line + 200-day MA overlay + 52-week hi/lo readout + RSI panel."""
-    d = load_prices(ticker_id).dropna(subset=["adj_close"]).sort_values("trade_date")
+    raw = load_prices(ticker_id)
+    if raw.empty or "adj_close" not in raw.columns:
+        return
+    d = raw.dropna(subset=["adj_close"]).sort_values("trade_date")
     if d.empty:
         return
     d = d.reset_index(drop=True)
@@ -865,3 +874,37 @@ with tab4:
     c1, c2 = st.columns(2)
     price_block("SPX_INDEX", "S&P 500", ACCENT, c1)
     price_block("OSEBX_INDEX", "OSEBX", "#E0A458", c2)
+
+# ===================== TAB 5: MY HOLDINGS =====================
+with tab5:
+    st.header("My holdings")
+    st.caption("Factual key numbers and the same technical/valuation context "
+               "as the index tabs, for your current positions. This is "
+               "descriptive only — it does not give buy, sell or hold advice "
+               "on any position. Not financial advice.")
+    holdings = getattr(config, "HOLDINGS", {})
+    if not holdings:
+        st.info("No holdings configured. Add tickers to HOLDINGS in config.py.")
+    else:
+        tickers = list(holdings.items())
+        # Two holdings per row
+        for i in range(0, len(tickers), 2):
+            cols = st.columns(2)
+            for j, col in enumerate(cols):
+                if i + j >= len(tickers):
+                    break
+                tkr, name = tickers[i + j]
+                col.subheader(name)
+                col.caption(tkr)
+                # price chart + MA/RSI/Bollinger (reuses index price_block)
+                price_block(tkr, name, ACCENT, col)
+                # valuation readouts (P/E, P/B) accruing from the snapshot
+                v = load_valuation(tkr)
+                with col.container():
+                    valuation_readout(v, "pe_ratio", f"{name} P/E TTM")
+                    valuation_readout(v, "pb_ratio", f"{name} P/B")
+        st.divider()
+        st.caption("Note: newly listed or spun-off names (e.g. recently "
+                   "demerged companies) will have short price history, so "
+                   "their 200-day average and 52-week range stay partial "
+                   "until enough trading days accrue.")
