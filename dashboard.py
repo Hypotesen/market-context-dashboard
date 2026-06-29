@@ -451,14 +451,27 @@ st.title("Market Context Dashboard")
 lu = last_updated()
 if lu:
     today = pd.Timestamp.today().normalize()
-    age = (today - pd.Timestamp(lu)).days
-    if age <= 4:
+    lu_ts = pd.Timestamp(lu)
+    cal_age = (today - lu_ts).days
+    # Count business days between the data date and today. This is the honest
+    # measure: data from Friday is fine on Monday (≈1 business day) but stale on
+    # Thursday. np.busday_count excludes weekends automatically.
+    import numpy as np
+    biz_age = int(np.busday_count(lu_ts.date(), today.date()))
+    # Fresh if the data is from today or the most recent business day or two
+    # (accounts for the fetch running after close, and for holidays).
+    if biz_age <= 1:
         st.caption(f"For market understanding — not trading signals. "
                    f"🟢 Data current as of **{lu}**.")
+    elif biz_age <= 2:
+        st.caption(f"For market understanding — not trading signals. "
+                   f"🟡 Data as of **{lu}** ({biz_age} business days old) — "
+                   "slightly behind; refresh if you want the latest.")
     else:
-        st.warning(f"⚠️ Data last updated **{lu}** ({age} days ago). "
-                   "The daily job may have failed — check GitHub Actions, "
-                   "or run fetch_data.py locally.")
+        st.warning(f"⚠️ Data last updated **{lu}** — {biz_age} business days "
+                   f"({cal_age} calendar days) ago. The scheduled job likely "
+                   "skipped (GitHub free-tier schedules are unreliable). Go to "
+                   "the repo's Actions tab → Run workflow to refresh now.")
 else:
     st.caption("For market understanding — not trading signals. "
                "No data yet — run fetch_data.py.")
